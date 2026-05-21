@@ -1,66 +1,107 @@
-"""Core slicer: streams log files and filters by time range and severity."""
+"""Core slicing logic: filter log lines by time range and severity."""
+from __future__ import annotations
 
+import sys
 from datetime import datetime
-from typing import Generator, Iterable, Optional, Set
+from typing import Generator, Iterable, Optional, Tuple
 
 from logslice.parser import LogEntry, parse_line
+from logslice.stats import SliceStats
 
-ALL_LEVELS: Set[str] = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+# Severity ordering (lowest → highest)
+_SEVERITY_ORDER = [
+    "debug",
+    "info",
+    "warning",
+    "error",
+    "critical",
+]
 
-SEVERITY_ORDER = {
-    "DEBUG": 0,
-    "INFO": 1,
-    "WARNING": 2,
-    "ERROR": 3,
-    "CRITICAL": 4,
-}
 
-
-def _meets_severity(entry_level: str, min_level: Optional[str]) -> bool:
-    if min_level is None:
+def _meets_severity(entry_severity: str, min_severity: Optional[str]) -> bool:
+    """Return True when *entry_severity* is at or above *min_severity*."""
+    if min_severity is None:
         return True
-    entry_rank = SEVERITY_ORDER.get(entry_level, -1)
-    min_rank = SEVERITY_ORDER.get(min_level.upper(), 0)
-    return entry_rank >= min_rank
+    try:
+        entry_idx = _SEVERITY_ORDER.index(entry_severity.lower())
+        min_idx = _SEVERITY_ORDER.index(min_severity.lower())
+    except ValueError:
+        return True
+    return entry_idx >= min_idx
 
 
 def slice_lines(
     lines: Iterable[str],
+    *,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
-    min_level: Optional[str] = None,
-) -> Generator[LogEntry, None, None]:
-    """Filter an iterable of raw log lines by time range and minimum severity.
+    min_severity: Optional[str] = None,
+    collect_stats: bool = False,
+) -> Tuple[Generator[LogEntry, None, None], Optional[SliceStats]]:
+    """Filter *lines* and yield matching :class:`LogEntry` objects.
 
-    Args:
-        lines:     Iterable of raw log line strings.
-        start:     Inclusive lower bound for timestamp filtering.
-        end:       Inclusive upper bound for timestamp filtering.
-        min_level: Minimum severity level (e.g. "WARNING" includes WARNING+).
-
-    Yields:
-        LogEntry objects that pass all filters.
+    Returns a ``(generator, stats)`` pair.  *stats* is a
+    :class:`~logslice.stats.SliceStats` instance when *collect_stats* is
+    ``True``, otherwise ``None``.
     """
-    for line in lines:
-        entry = parse_line(line)
-        if entry is None:
-            continue
-        if start is not None and entry.timestamp < start:
-            continue
-        if end is not None and entry.timestamp > end:
-            continue
-        if not _meets_severity(entry.level, min_level):
-            continue
-        yield entry
+    stats: Optional[SliceStats] = SliceStats() if collect_stats else None
+
+    def _generate() -> Generator[LogEntry, None, None]:
+        for raw in lines:
+            entry = parse_line(raw.rstrip("\n"))
+            if entry is None:
+                if stats is not None:
+                    stats.record_unparseable()
+                continue
+            if start is not None and entry.timestamp < start:
+                if stats is not None:
+                    stats.record_time_skip(before=True)
+                continue
+            if end is not None and entry.timestamp > end:
+                if stats is not None:
+                    stats.record_time_skip(before=False)
+                continue
+            if not _meets_severity(entry.severity, min_severity):
+                if stats is not None:
+                    stats.record_severity_skip(entry.severity)
+                continue
+            if stats is not None:
+                stats.record_match(entry.severity)
+            yield entry
+
+    return _generate(), stats
 
 
 def slice_file(
     path: str,
+    *,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
-    min_level: Optional[str] = None,
-    encoding: str = "utf-8",
-) -> Generator[LogEntry, None, None]:
-    """Open a log file and stream filtered entries without loading it fully."""
-    with open(path, "r", encoding=encoding, errors="replace") as fh:
-        yield from slice_lines(fh, start=start, end=end, min_level=min_level)
+    min_severity: Optional[str] = None,
+    collect_stats: bool = False,
+) -> Tuple[Generator[LogEntry, None, None], Optional[SliceStats]]:
+    """Open *path* and return a ``(generator, stats)`` pair via
+    :func:`slice_lines`.
+    """
+    try:
+        fh = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"logslice: cannot open '{path}': {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    gen, stats = slice_lines(
+        fh,
+        start=start,
+        end=end,
+        min_severity=min_severity,
+        collect_stats=collect_stats,
+    )
+
+    # Wrap generator so the file handle is closed after exhaustion
+    def _wrap() -> Generator[LogEntry, None, None]:
+        try:
+            yield from gen
+        finally:
+            fh.close()
+
+    return _wrap(), stats
