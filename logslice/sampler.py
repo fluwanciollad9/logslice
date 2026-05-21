@@ -49,7 +49,12 @@ def _reservoir_sample(
     size: int,
     rng: random.Random,
 ) -> List[LogEntry]:
-    """Return a random sample of *size* entries using reservoir sampling."""
+    """Return a random sample of *size* entries using reservoir sampling.
+
+    Uses Algorithm R: each entry beyond the initial *size* has a
+    ``size / (i + 1)`` probability of replacing a randomly chosen entry
+    already in the reservoir, ensuring a uniform distribution.
+    """
     reservoir: List[LogEntry] = []
     for i, entry in enumerate(entries):
         if i < size:
