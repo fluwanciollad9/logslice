@@ -35,6 +35,8 @@ def _highlight_keywords(text: str, keywords: list[str], color: bool, case_sensit
         return text
 
     for kw in keywords:
+        if not kw:
+            continue
         search = kw if case_sensitive else kw.lower()
         compare = text if case_sensitive else text.lower()
         result = []
