@@ -61,6 +61,11 @@ class TestMatches:
         assert _matches("login attempt failed", opts) is True
         assert _matches("login attempt", opts) is False
 
+    def test_include_and_exclude_keyword_conflict(self):
+        """Exclude takes precedence when both include and exclude keywords match."""
+        opts = FilterOptions(include_keywords=["error"], exclude_keywords=["error"])
+        assert _matches("error occurred", opts) is False
+
 
 class TestFilterEntries:
     def test_yields_matching_entries(self):
