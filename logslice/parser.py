@@ -1,68 +1,69 @@
-"""Log line parser: extracts timestamp and severity from common log formats."""
+"""Parse raw log lines into structured LogEntry objects."""
+
+from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-# Matches: 2024-01-15 12:34:56,789 [ERROR] Some message
-PATTERN_STANDARD = re.compile(
-    r"(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)"
-    r"\s*\[?(?P<level>DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL|FATAL)\]?"
-    r"\s*(?P<message>.*)",
-    re.IGNORECASE,
+# Severity aliases normalised to canonical names
+_SEVERITY_ALIASES: dict[str, str] = {
+    "warn": "WARNING",
+    "warning": "WARNING",
+    "err": "ERROR",
+    "error": "ERROR",
+    "info": "INFO",
+    "debug": "DEBUG",
+    "critical": "CRITICAL",
+    "crit": "CRITICAL",
+    "fatal": "CRITICAL",
+}
+
+_LINE_RE = re.compile(
+    r"^(?P<ts>[\d\-T :./]+)\s+"
+    r"(?P<sev>[A-Za-z]+)\s+"
+    r"(?P<msg>.+)$"
 )
 
-TIMESTAMP_FORMATS = [
-    "%Y-%m-%dT%H:%M:%S.%f",
+_TS_FORMATS = [
     "%Y-%m-%dT%H:%M:%S",
-    "%Y-%m-%d %H:%M:%S.%f",
-    "%Y-%m-%d %H:%M:%S,%f",
     "%Y-%m-%d %H:%M:%S",
+    "%Y/%m/%d %H:%M:%S",
+    "%d/%m/%Y %H:%M:%S",
 ]
-
-SEVERITY_ALIASES = {
-    "WARN": "WARNING",
-    "FATAL": "CRITICAL",
-}
 
 
 @dataclass
 class LogEntry:
-    timestamp: datetime
-    level: str
+    timestamp: Optional[datetime]
+    severity: Optional[str]
     message: str
     raw: str
+    tags: list[str] = field(default_factory=list)
 
 
-def parse_timestamp(ts_str: str) -> Optional[datetime]:
-    """Try to parse a timestamp string using known formats."""
-    ts_str = ts_str.strip()
-    for fmt in TIMESTAMP_FORMATS:
+def parse_timestamp(value: str) -> Optional[datetime]:
+    value = value.strip()
+    for fmt in _TS_FORMATS:
         try:
-            return datetime.strptime(ts_str, fmt)
+            return datetime.strptime(value, fmt)
         except ValueError:
             continue
     return None
 
 
 def parse_line(line: str) -> Optional[LogEntry]:
-    """Parse a single log line into a LogEntry, or return None if unparseable."""
     line = line.rstrip("\n")
-    match = PATTERN_STANDARD.match(line)
-    if not match:
+    m = _LINE_RE.match(line)
+    if not m:
         return None
-
-    ts = parse_timestamp(match.group("ts"))
-    if ts is None:
-        return None
-
-    level = match.group("level").upper()
-    level = SEVERITY_ALIASES.get(level, level)
-
+    ts = parse_timestamp(m.group("ts"))
+    raw_sev = m.group("sev").lower()
+    severity = _SEVERITY_ALIASES.get(raw_sev, raw_sev.upper())
     return LogEntry(
         timestamp=ts,
-        level=level,
-        message=match.group("message").strip(),
+        severity=severity,
+        message=m.group("msg").strip(),
         raw=line,
     )
