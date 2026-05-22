@@ -69,3 +69,16 @@ class TestPipelineTruncation:
         opts = PipelineOptions(enable_truncate=True)
         result = list(run_pipeline([], opts))
         assert result == []
+
+    def test_truncation_does_not_mutate_original_entries(self):
+        """Ensure run_pipeline yields new entries rather than modifying the originals."""
+        original_message = "z" * 200
+        entries = [_entry(original_message)]
+        opts = PipelineOptions(
+            enable_truncate=True,
+            truncate=TruncateOptions(max_length=50),
+        )
+        result = list(run_pipeline(entries, opts))
+        assert len(result[0].message) == 50
+        # The original entry object must remain unchanged.
+        assert entries[0].message == original_message
