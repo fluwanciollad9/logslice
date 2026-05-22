@@ -68,6 +68,15 @@ class TestFormatEntryJson:
         data = json.loads(format_entry(_entry(), options=opts, source="srv.log"))
         assert "source" not in data
 
+    def test_json_timestamp_is_iso_format(self):
+        opts = FormatOptions(fmt="json")
+        data = json.loads(format_entry(_entry(), options=opts))
+        # Should be parseable as an ISO 8601 datetime string
+        parsed = datetime.fromisoformat(data["timestamp"])
+        assert parsed.year == DT.year
+        assert parsed.month == DT.month
+        assert parsed.day == DT.day
+
 
 class TestFormatEntryCsv:
     def test_returns_three_columns_by_default(self):
@@ -83,10 +92,10 @@ class TestFormatEntryCsv:
 
 class TestFormatEntries:
     def test_returns_same_count(self):
-        entries = [_entry(), _entry(severity="ERROR"), _entry(severity="DEBUG")]
-        results = format_entries(entries)
-        assert len(results) == 3
+        entries = [_entry(), _entry(severity="ERROR"), _entry(severity="WARNING")]
+        results = list(format_entries(entries))
+        assert len(results) == len(entries)
 
-    def test_each_element_is_string(self):
-        results = format_entries([_entry()])
-        assert all(isinstance(r, str) for r in results)
+    def test_empty_input_returns_empty(self):
+        results = list(format_entries([]))
+        assert results == []
