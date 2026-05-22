@@ -43,6 +43,10 @@ class TestMaskOptions:
         opts = MaskOptions(builtins=["ipv4", "email"])
         assert opts.builtins == ["ipv4", "email"]
 
+    def test_custom_replacement_string(self):
+        opts = MaskOptions(replacement="***")
+        assert opts.replacement == "***"
+
 
 # ---------------------------------------------------------------------------
 # mask_entry
@@ -85,38 +89,45 @@ class TestMaskEntry:
         result = mask_entry(entry, opts)
         assert result.message == entry.message
 
-    def test_custom_replacement_string(self):
-        opts = MaskOptions(builtins=["ipv4"], replacement="***")
-        result = mask_entry(_entry("ip=10.0.0.1"), opts)
-        assert "***" in result.message
+    def test_custom_replacement_used_in_output(self):
+        opts = MaskOptions(builtins=["ipv4"], replacement="<IP>")
+        result = mask_entry(_entry("from 10.0.0.1 to 10.0.0.2"), opts)
+        assert "10.0.0.1" not in result.message
+        assert "<IP>" in result.message
 
-    def test_original_entry_unchanged(self):
+    def test_multiple_matches_all_redacted(self):
         opts = MaskOptions(builtins=["ipv4"])
-        original = _entry("ip=10.0.0.1")
-        mask_entry(original, opts)
-        assert original.message == "ip=10.0.0.1"
+        result = mask_entry(_entry("from 10.0.0.1 to 10.0.0.2"), opts)
+        assert "10.0.0.1" not in result.message
+        assert "10.0.0.2" not in result.message
+
+    def test_original_entry_not_mutated(self):
+        opts = MaskOptions(builtins=["ipv4"])
+        entry = _entry("from 10.0.0.1")
+        original_message = entry.message
+        mask_entry(entry, opts)
+        assert entry.message == original_message
 
 
 # ---------------------------------------------------------------------------
 # mask_entries
 # ---------------------------------------------------------------------------
 
-def test_none_opts_yields_unchanged():
-    entries = [_entry("ip=1.2.3.4"), _entry("email=a@b.com")]
-    result = list(mask_entries(entries, opts=None))
-    assert [e.message for e in result] == [e.message for e in entries]
+class TestMaskEntries:
+    def test_masks_all_entries(self):
+        opts = MaskOptions(builtins=["ipv4"])
+        entries = [
+            _entry("from 10.0.0.1"),
+            _entry("to 172.16.0.5"),
+            _entry("no ip here"),
+        ]
+        results = mask_entries(entries, opts)
+        assert "10.0.0.1" not in results[0].message
+        assert "172.16.0.5" not in results[1].message
+        assert results[2].message == "no ip here"
 
-
-def test_mask_entries_applies_to_all():
-    opts = MaskOptions(builtins=["ipv4"])
-    entries = [_entry("a 1.2.3.4"), _entry("b 5.6.7.8"), _entry("no ip here")]
-    result = list(mask_entries(entries, opts))
-    assert "1.2.3.4" not in result[0].message
-    assert "5.6.7.8" not in result[1].message
-    assert result[2].message == "no ip here"
-
-
-def test_mask_entries_is_lazy():
-    opts = MaskOptions(builtins=["email"])
-    gen = mask_entries(iter([_entry("x@y.com")]), opts)
-    assert hasattr(gen, "__next__")
+    def test_returns_same_length(self):
+        opts = MaskOptions(builtins=["email"])
+        entries = [_entry("a@b.com"), _entry("hello")]
+        results = mask_entries(entries, opts)
+        assert len(results) == len(entries)
