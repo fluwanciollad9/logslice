@@ -1,60 +1,74 @@
-"""High-level pipeline that wires all logslice stages together."""
-
+"""Pipeline orchestration for logslice."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Optional
 
 from logslice.parser import LogEntry
 from logslice.filter import FilterOptions, filter_entries
+from logslice.sampler import SampleOptions, sample_entries
+from logslice.deduplicator import DedupeOptions, deduplicate_entries
 from logslice.highlighter import HighlightOptions, highlight_entries
 from logslice.truncator import TruncateOptions, truncate_entries
-from logslice.deduplicator import DedupeOptions, deduplicate_entries
-from logslice.sampler import SampleOptions, sample_entries
-from logslice.contextualizer import ContextOptions, contextualize_entries
 from logslice.tagger import TaggerOptions, tag_entries
+from logslice.ratelimiter import RateLimitOptions, ratelimit_entries
+from logslice.masker import MaskOptions, mask_entries
+from logslice.splitter import SplitOptions, split_entries
+from logslice.sorter import SortOptions, sort_entries
 
 
 @dataclass
 class PipelineOptions:
-    filter: FilterOptions | None = None
-    highlight: HighlightOptions | None = None
-    truncate: TruncateOptions | None = None
-    dedupe: DedupeOptions | None = None
-    sample: SampleOptions | None = None
-    context: ContextOptions | None = None
-    tagger: TaggerOptions | None = None
+    filter: Optional[FilterOptions] = None
+    sample: Optional[SampleOptions] = None
+    dedupe: Optional[DedupeOptions] = None
+    highlight: Optional[HighlightOptions] = None
+    truncate: Optional[TruncateOptions] = None
+    tagger: Optional[TaggerOptions] = None
+    ratelimit: Optional[RateLimitOptions] = None
+    mask: Optional[MaskOptions] = None
+    split: Optional[SplitOptions] = None
+    sort: Optional[SortOptions] = None
 
 
 def run_pipeline(
     entries: Iterable[LogEntry],
-    options: PipelineOptions | None = None,
+    opts: PipelineOptions | None = None,
 ) -> Iterator[LogEntry]:
-    """Apply all enabled pipeline stages in order and yield resulting entries."""
-    if options is None:
-        options = PipelineOptions()
+    """Run *entries* through the configured pipeline stages and yield results."""
+    if opts is None:
+        opts = PipelineOptions()
 
     stream: Iterable[LogEntry] = entries
 
-    if options.tagger is not None:
-        stream = tag_entries(stream, options.tagger)
+    if opts.mask is not None:
+        stream = mask_entries(stream, opts.mask)
 
-    if options.filter is not None:
-        stream = filter_entries(stream, options.filter)
+    if opts.tagger is not None:
+        stream = tag_entries(stream, opts.tagger)
 
-    if options.dedupe is not None:
-        stream = deduplicate_entries(stream, options.dedupe)
+    if opts.filter is not None:
+        stream = filter_entries(stream, opts.filter)
 
-    if options.sample is not None:
-        stream = sample_entries(stream, options.sample)
+    if opts.ratelimit is not None:
+        stream = ratelimit_entries(stream, opts.ratelimit)
 
-    if options.context is not None:
-        stream = contextualize_entries(stream, options.context)
+    if opts.dedupe is not None:
+        stream = deduplicate_entries(stream, opts.dedupe)
 
-    if options.truncate is not None:
-        stream = truncate_entries(stream, options.truncate)
+    if opts.sample is not None:
+        stream = sample_entries(stream, opts.sample)
 
-    if options.highlight is not None:
-        stream = highlight_entries(stream, options.highlight)
+    if opts.truncate is not None:
+        stream = truncate_entries(stream, opts.truncate)
+
+    if opts.highlight is not None:
+        stream = highlight_entries(stream, opts.highlight)
+
+    if opts.split is not None:
+        stream = split_entries(stream, opts.split)
+
+    if opts.sort is not None:
+        stream = sort_entries(stream, opts.sort)
 
     yield from stream
