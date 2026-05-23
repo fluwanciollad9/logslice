@@ -23,6 +23,7 @@ def _run(
     diff_opts: DiffOptions,
     filter_opts: FilterOptions,
 ) -> List[LogEntry]:
+    """Run entries through the filter then diffier pipeline and return results."""
     filtered = filter_entries(iter(entries), filter_opts)
     diffed = diff_entries(filtered, diff_opts)
     return list(diffed)
@@ -55,3 +56,8 @@ class TestPipelineDiffier:
         # Only first ERROR passes (second is unchanged and suppressed)
         assert len(result) == 1
         assert result[0].message == "error msg"
+
+    def test_empty_input_returns_empty(self):
+        """Pipeline should handle an empty entry list without errors."""
+        result = _run([], DiffOptions(enabled=True), FilterOptions())
+        assert result == []
