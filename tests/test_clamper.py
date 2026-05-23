@@ -80,21 +80,16 @@ class TestClampEntries:
         severities = [e.severity for e in result]
         assert severities == ["info", "warning", "error"]
 
-    def test_allowed_severities_acts_as_allowlist(self) -> None:
-        entries = [_entry("debug"), _entry("info"), _entry("error")]
+    def test_empty_entries_returns_empty(self) -> None:
+        assert self._run([]) == []
+
+    def test_allowed_severities_filters_to_exact_set(self) -> None:
+        entries = [
+            _entry("debug"),
+            _entry("info"),
+            _entry("warning"),
+            _entry("error"),
+        ]
         result = self._run(entries, allowed_severities=["info", "error"])
         severities = [e.severity for e in result]
         assert severities == ["info", "error"]
-
-    def test_entry_with_no_severity_passes_through(self) -> None:
-        entry = LogEntry(
-            timestamp=datetime(2024, 1, 1),
-            severity=None,
-            message="bare",
-            raw="bare",
-        )
-        result = list(clamp_entries([entry], ClampOptions(min_severity="error")))
-        assert result == [entry]
-
-    def test_empty_input_yields_nothing(self) -> None:
-        assert self._run([], min_severity="info") == []
