@@ -1,91 +1,122 @@
-"""End-to-end pipeline: slice → filter → transform → annotate → batch → write."""
+"""Pipeline: orchestrate all processing stages over a stream of LogEntry."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import IO, Iterable, Iterator, List, Optional
+from typing import Iterable, Iterator, List, Optional
 
-from logslice.annotator import AnnotateOptions, annotate_entries
-from logslice.batcher import BatchOptions, batch_entries
-from logslice.filter import FilterOptions, filter_entries
-from logslice.formatter import FormatOptions, format_entries
-from logslice.highlighter import HighlightOptions, highlight_entries
-from logslice.masker import MaskOptions, mask_entries
 from logslice.parser import LogEntry
-from logslice.ratelimiter import RateLimitOptions, ratelimit_entries
+from logslice.filter import FilterOptions, filter_entries
 from logslice.sampler import SampleOptions, sample_entries
-from logslice.scoper import ScopeOptions, scope_entries
-from logslice.sorter import SortOptions, sort_entries
-from logslice.tagger import TaggerOptions, tag_entries
-from logslice.throttler import ThrottleOptions, throttle_entries
-from logslice.transformer import TransformOptions, transform_entries
+from logslice.deduplicator import DedupeOptions, deduplicate_entries
+from logslice.highlighter import HighlightOptions, highlight_entries
 from logslice.truncator import TruncateOptions, truncate_entries
-from logslice.writer import write_entries
+from logslice.tagger import TaggerOptions, tag_entries
+from logslice.ratelimiter import RateLimitOptions, ratelimit_entries
+from logslice.masker import MaskOptions, mask_entries
+from logslice.sorter import SortOptions, sort_entries
+from logslice.annotator import AnnotateOptions, annotate_entries
+from logslice.diffier import DiffOptions, diff_entries
+from logslice.throttler import ThrottleOptions, throttle_entries
+from logslice.scoper import ScopeOptions, scope_entries
+from logslice.flattener import FlattenOptions, flatten_entries
+from logslice.joiner import JoinOptions, join_entries
+from logslice.capper import CapOptions, cap_entries
+from logslice.replayer import ReplayOptions, replay_entries
+from logslice.labeler import LabelOptions, label_entries
 
 
 @dataclass
 class PipelineOptions:
     filter: FilterOptions = field(default_factory=FilterOptions)
     sample: Optional[SampleOptions] = None
-    mask: Optional[MaskOptions] = None
+    dedupe: Optional[DedupeOptions] = None
+    highlight: Optional[HighlightOptions] = None
+    truncate: Optional[TruncateOptions] = None
     tagger: Optional[TaggerOptions] = None
     ratelimit: Optional[RateLimitOptions] = None
-    throttle: Optional[ThrottleOptions] = None
-    transform: Optional[TransformOptions] = None
-    truncate: Optional[TruncateOptions] = None
-    annotate: Optional[AnnotateOptions] = None
-    highlight: Optional[HighlightOptions] = None
+    mask: Optional[MaskOptions] = None
     sort: Optional[SortOptions] = None
+    annotate: Optional[AnnotateOptions] = None
+    diff: Optional[DiffOptions] = None
+    throttle: Optional[ThrottleOptions] = None
     scope: Optional[ScopeOptions] = None
-    batch: Optional[BatchOptions] = None
-    format: FormatOptions = field(default_factory=FormatOptions)
+    flatten: Optional[FlattenOptions] = None
+    join: Optional[JoinOptions] = None
+    cap: Optional[CapOptions] = None
+    replay: Optional[ReplayOptions] = None
+    label: Optional[LabelOptions] = None
 
 
 def run_pipeline(
-    entries: Iterable[LogEntry],
-    options: PipelineOptions | None = None,
-    output: IO[str] | None = None,
-) -> int:
-    """Run *entries* through the full pipeline and write formatted output.
+    entries: Iterable[LogEntry], opts: PipelineOptions
+) -> Iterator[LogEntry]:
+    """Run *entries* through every enabled pipeline stage in order."""
+    stream: Iterable[LogEntry] = entries
 
-    Returns the number of entries written.
-    """
-    if options is None:
-        options = PipelineOptions()
+    if opts.flatten is not None:
+        stream = flatten_entries(stream, opts.flatten)
 
-    stream: Iterator[LogEntry] = iter(entries)
+    if opts.join is not None:
+        stream = join_entries(stream, opts.join)
 
-    if options.mask:
-        stream = mask_entries(stream, options.mask)
-    if options.tagger:
-        stream = tag_entries(stream, options.tagger)
-    stream = filter_entries(stream, options.filter)
-    if options.ratelimit:
-        stream = ratelimit_entries(stream, options.ratelimit)
-    if options.throttle:
-        stream = throttle_entries(stream, options.throttle)
-    if options.sample:
-        stream = sample_entries(stream, options.sample)
-    if options.transform:
-        stream = transform_entries(stream, options.transform)
-    if options.truncate:
-        stream = truncate_entries(stream, options.truncate)
-    if options.annotate:
-        stream = annotate_entries(stream, options.annotate)
-    if options.sort:
-        stream = sort_entries(stream, options.sort)
-    if options.scope:
-        stream = scope_entries(stream, options.scope)
+    if opts.mask is not None:
+        stream = mask_entries(stream, opts.mask)
 
-    # If batching is requested, flatten batches back to entries for writing.
-    if options.batch:
-        def _flatten_batches(s: Iterator[LogEntry]) -> Iterator[LogEntry]:
-            for batch in batch_entries(s, options.batch):
-                yield from batch.entries
-        stream = _flatten_batches(stream)
+    if opts.tagger is not None:
+        stream = tag_entries(stream, opts.tagger)
 
-    if options.highlight:
-        stream = highlight_entries(stream, options.highlight)
+    if opts.label is not None:
+        stream = _apply_label_after_filter(stream, opts)
+        return stream
 
-    formatted = format_entries(stream, options.format)
-    kwargs = {} if output is None else {"output": output}
-    return write_entries(formatted, **kwargs)
+    stream = filter_entries(stream, opts.filter)
+
+    if opts.label is not None:
+        stream = label_entries(stream, opts.label)
+
+    stream = _apply_post_filter(stream, opts)
+    return stream
+
+
+def _apply_label_after_filter(
+    stream: Iterable[LogEntry], opts: PipelineOptions
+) -> Iterator[LogEntry]:
+    """Filter first, then label, then apply remaining stages."""
+    filtered = filter_entries(stream, opts.filter)
+    labeled = label_entries(filtered, opts.label)  # type: ignore[arg-type]
+    return _apply_post_filter(labeled, opts)
+
+
+def _apply_post_filter(
+    stream: Iterable[LogEntry], opts: PipelineOptions
+) -> Iterator[LogEntry]:
+    if opts.ratelimit is not None:
+        stream = ratelimit_entries(stream, opts.ratelimit)
+    if opts.dedupe is not None:
+        stream = deduplicate_entries(stream, opts.dedupe)
+    if opts.sample is not None:
+        stream = sample_entries(stream, opts.sample)
+    if opts.throttle is not None:
+        stream = throttle_entries(stream, opts.throttle)
+    if opts.cap is not None:
+        stream = cap_entries(stream, opts.cap)
+    if opts.scope is not None:
+        stream = scope_entries(stream, opts.scope)
+    if opts.truncate is not None:
+        stream = truncate_entries(stream, opts.truncate)
+    if opts.diff is not None:
+        stream = diff_entries(stream, opts.diff)
+    if opts.annotate is not None:
+        stream = annotate_entries(stream, opts.annotate)
+    if opts.highlight is not None:
+        stream = highlight_entries(stream, opts.highlight)
+    if opts.sort is not None:
+        stream = _flatten_batches(sort_entries(stream, opts.sort))
+    if opts.replay is not None:
+        stream = replay_entries(stream, opts.replay)
+    return stream  # type: ignore[return-value]
+
+
+def _flatten_batches(batches: Iterable[List[LogEntry]]) -> Iterator[LogEntry]:
+    for batch in batches:
+        yield from batch
